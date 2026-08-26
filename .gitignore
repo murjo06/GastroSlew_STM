@@ -3,3 +3,5 @@
 *.ino
 *.py
 Debug
+.vscode
+.settings
