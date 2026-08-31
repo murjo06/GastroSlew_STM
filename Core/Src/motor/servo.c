@@ -8,56 +8,82 @@
 #include "usb.h"
 #include "main.h"
 #include "serial.h"
+#include "constants.h"
+#include "lead_lag.h"
+#include "cordic.h"
+#include "resonant.h"
 
+#include <stdint.h>
 #include <string.h>
+#include <math.h>
 
 float velocity = 0.0f;
-float target_velocity = 10.0f;	// sidereal 0.035903916f
+float target_velocity = 0.036f;	// sidereal 0.035903916
 
-float iq_offset = 0.0f;
+int64_t position = 0;
+int64_t target_position = 0;
 
 pid_t position_pid;
 pid_t velocity_pid;
 
-int64_t position = 0;
-volatile int64_t target_position = 0;
-
-int32_t prev_encoder_position = 0;
+lead_lag_t compensation_lead_lag;
+pid_t compensation_pid;
+resonant_t compensation_resonant;
 
 static int32_t velocity_average_counts[VELOCITY_AVERAGING_INTERVAL] = {0};
 static int32_t velocity_average_cycles[VELOCITY_AVERAGING_INTERVAL] = {0};
 static uint16_t velocity_average_index = 0;
 
-const float torque_constant_inverse = 1.0f / (float)(TORQUE_CONSTANT);
+static uint32_t starting_loops = 0;
+
+static const float velocity_sampling_period = ((float)((2L * (long)TIM_PERIOD + 1L) * (long)VELOCITY_LOOP_PRESCALER)) / 170e6f;
 
 void Servo_Init(void)
 {
-	Pid_Init(&velocity_pid, 0b110);
-	Pid_Init(&position_pid, 0b000);
+	PID_Init(&velocity_pid, 1.0f, 0.0f, 0.0f);
+	PID_Init(&position_pid, 0.0f, 0.0f, 0.0f);
+	PID_Init(&compensation_pid, 0.7f, 0.0f, 0.0f);
 
-	velocity_pid.kp = 0.08f;
-	velocity_pid.ki = 0.0f;	//0.21
-	velocity_pid.kd = 0.0f;
+	float sin = sinf(COMPENSATION_PHASE_SHIFT);
+	float alpha = (1.0f + sin) / (1.0f - sin);
+	float root_alpha = sqrtf(alpha);
 
-	velocity_pid.derivative_interval = 3;
+	float fz = COMPENSATION_FREQUENCY_MAX / root_alpha;
+	float fp = COMPENSATION_FREQUENCY_MAX * root_alpha;
+
+	LeadLag_Init(&compensation_lead_lag, COMPENSATION_GAIN, fz, fp, velocity_sampling_period);
+
+	Resonant_Init(&compensation_resonant, 0.48f, 0.15f, 10.0f, velocity_sampling_period);
 }
 
 void servo_reset_pid(void)
 {
 	velocity_pid.integral = 0.0f;
+	velocity_pid.prev_cycle = DWT->CYCCNT;
+
+	//compensation_pid.integral = 0.0f;
+	//compensation_pid.prev_cycle = DWT->CYCCNT;
+
 	position_pid.integral = 0.0f;
+	//todo: prev_cycle za lego?
+
+	int32_t encoder_angle = MT6835_GetRawAngle();
+	uint32_t now = DWT->CYCCNT;
+	for(int i = 0; i < VELOCITY_AVERAGING_INTERVAL; i++) {
+		velocity_average_counts[i] = encoder_angle;
+		velocity_average_cycles[i] = now;
+	}
+	velocity_average_index = 0;
 }
 
 void calculate_position_pid(void)
 {
 	return;
-    int32_t encoder_position = MT6835_GetRawAngle();        // 21 biten kot
-    position += (int64_t)(encoder_position - prev_encoder_position);	//todo: wrap
-    target_velocity = get_pid_output(&position_pid, (float)(target_position - position));
-    prev_encoder_position = encoder_position;
+
+    target_velocity = PID_GetOutput(&position_pid, (float)(target_position - position));
 }
 
-static float calculate_current_velocity(void)
+float calculate_current_velocity(void)
 {
 	int32_t new_encoder = MT6835_GetRawAngle();
 	int32_t encoder_diff = new_encoder - velocity_average_counts[velocity_average_index];
@@ -82,138 +108,64 @@ static float calculate_current_velocity(void)
     return current_velocity;
 }
 
-void calculate_velocity_pid(float iq)
+void calculate_velocity_pid(void)
 {
-	velocity = calculate_current_velocity();
-    iq_target = get_pid_output(&velocity_pid, target_velocity - velocity) - velocity_pid.kd * iq + iq_offset;
-
-	//iq_target = iq_offset + ((DWT->CYCCNT & 0x8000000) ? 2.0f : 0.0f);
-
-	iq_target = 0.0f;
-
-	if(iq_target > 6.0f) {
-		iq_target = 6.0f;
-	} else if(iq_target < -6.0f) {
-		iq_target = -6.0f;
+	if(++starting_loops <= 250) {	// 1 s
+		return;
 	}
+
+	float velocity_error = target_velocity - velocity;
+	setpoint_velocity = (float)POLE_PAIRS * (target_velocity + PID_GetOutput(&velocity_pid, velocity_error));
+
+	if(iq_saturated) {
+		if(((delta > 0.0 && velocity_error > 0.0f) || (delta < 0.0 && velocity_error < 0.0f)) &&
+			velocity_pid.components & PID_INTEGRAL && velocity_pid.ki != 0.0f)
+		{
+			velocity_pid.integral -= velocity_error * velocity_pid.dt;
+		}
+		iq_saturated = false;
+	}
+
+	//float new_compensation = (absf(relative_error) <= 0.5f) ? PID_GetOutput(&compensation_pid, velocity_error) : 0.0f;
+
+	//iq_compensation = iq_compensation + compensation_alpha * (new_compensation - iq_compensation);
+
+	//iq_compensation = LeadLag_GetOutput(&compensation_lead_lag, velocity_error);
+	iq_compensation = PID_GetOutput(&compensation_pid, velocity_error);
+
+	/*
+	float max_compensation = COMPENSATION_MAX * (absf(target_velocity)) / (absf(target_velocity) + COMPENSATION_MAX);	// f(x) = a * x/(x + a)
+
+	if(iq_compensation > max_compensation) {
+		if(compensation_pid.components & PID_INTEGRAL) {
+			compensation_pid.integral -= velocity_error * compensation_pid.dt;
+		}
+		iq_compensation = max_compensation;
+	} else if(iq_compensation < -max_compensation) {
+		if(compensation_pid.components & PID_INTEGRAL) {
+			compensation_pid.integral -= velocity_error * compensation_pid.dt;
+		}
+		iq_compensation = -max_compensation;
+	}
+	*/
 
 	v_d = velocity;
 
 	if(velocity >= 50.0f) {
-		reset_pid(&velocity_pid);
-		iq_target = 0.0f;
+		PID_Reset(&velocity_pid);
 	}
 
-	uint8_t b[32] = {0};
-    //uint16_t len = u64ToDec(MT6835_GetRawAngle(), b);
-    uint16_t len = u64ToDec((uint32_t)(100000.0f + 1000.0f * v_d), b);
-    b[len] = '\n';
-	//len += u64ToDec((uint32_t)(100000.0f + 1000.0f * (iq_target - iq_offset)), b + len + 1);
-	//b[len + 1] = '\n';
-    usb_serial.print(b, 16);
-}
-
-void set_pid_calibration(uint8_t pid, uint8_t index, float value)
-{
-	switch(pid) {
-		case 0: {		//* pozicija
-			switch(index) {
-				case 0: {		// p
-					position_pid.kp = value;
-					break;
-				} case 1: {		// i
-					position_pid.ki = value;
-					break;
-				} case 2: {		// d
-					position_pid.kd = value;
-					break;
-				} default: return;
-			}
-			break;
-		} case 1: {		//* hitrost
-			switch(index) {
-				case 0: {		// p
-					velocity_pid.kp = value;
-					break;
-				} case 1: {		// i
-					velocity_pid.ki = value;
-					break;
-				} case 2: {		// d
-					velocity_pid.kd = value;
-					break;
-				} default: return;
-			}
-			break;
-		} case 2: {		//* d
-			switch(index) {
-				case 0: {		// p
-					d_pid.kp = value;
-					break;
-				} case 1: {		// i
-					d_pid.ki = value;
-					break;
-				} default: return;
-			}
-			break;
-		} case 3: {		//* q
-			switch(index) {
-				case 0: {		// p
-					q_pid.kp = value;
-					break;
-				} case 1: {		// i
-					q_pid.ki = value;
-					break;
-				} default: return;
-			}
-			break;
-		}
+	float power = 0.0f;
+	for(int i = 0; i < VELOCITY_LOOP_PRESCALER; i++) {
+		power += powers[i];
 	}
-}
+	power /= (float)VELOCITY_AVERAGING_INTERVAL;
 
-float get_pid_calibration(uint8_t pid, uint8_t index)
-{
-	switch(pid) {
-		case 0: {		//* pozicija
-			switch(index) {
-				case 0: {		// p
-					return position_pid.kp;
-				} case 1: {		// i
-					return position_pid.ki;
-				} case 2: {		// d
-					return position_pid.kd;
-				} default: return 0.0f;
-			}
-			break;
-		} case 1: {		//* hitrost
-			switch(index) {
-				case 0: {		// p
-					return velocity_pid.kp;
-				} case 1: {		// i
-					return velocity_pid.ki;
-				} case 2: {		// d
-					return velocity_pid.kd;
-				} default: return 0.0f;
-			}
-			break;
-		} case 2: {		//* d
-			switch(index) {
-				case 0: {		// p
-					return d_pid.kp;
-				} case 1: {		// i
-					return d_pid.ki;
-				} default: return 0.0f;
-			}
-			break;
-		} case 3: {		//* q
-			switch(index) {
-				case 0: {		// p
-					return q_pid.kp;
-				} case 1: {		// i
-					return q_pid.ki;
-				} default: return 0.0f;
-			}
-			break;
-		} default: return 0.0f;
-	}
-	return 0.0f;
+	uint8_t b[64] = {0};
+    //uint16_t len = u64ToDec(diff, b);
+    uint16_t len = u64ToDec((uint64_t)(1e9f + 1e6f * v_d), b);
+    b[len] = ',';
+	len += u64ToDec((uint64_t)(1e9f + 1e6f * power), b + len + 1);
+	b[len + 1] = '\n';
+    usb_serial.print(b, 64);
 }

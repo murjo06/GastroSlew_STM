@@ -27,6 +27,7 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include <stdint.h>
 
 /* USER CODE BEGIN Includes */
 
@@ -35,11 +36,6 @@ extern "C" {
 extern CORDIC_HandleTypeDef hcordic;
 
 /* USER CODE BEGIN Private defines */
-
-#define Q31_SCALE_F           2147483648.0f     // 2^31
-#define Q31_SCALE_INVERSE_F   4.656612873e-10f  // 2^-31
-#define Q31_TO_RAD_F          1.462918079e-9f   // pi / 2^31
-#define RAD_TO_Q31_F          6.835652755e8f    // 2^31 / pi
 
 /* USER CODE END Private defines */
 
@@ -54,6 +50,10 @@ void CORDIC_SetPhaseMode(void);
 void CORDIC_SinCos(int32_t angle_q31, int32_t *sin_q31, int32_t *cos_q31);
 
 int32_t CORDIC_Atan2(int32_t y_q31, int32_t x_q31);
+
+int32_t CORDIC_RadToQ31(float angle_rad);
+
+float CORDIC_Q31ToTrig(int32_t x);
 
 /* USER CODE END Prototypes */
 

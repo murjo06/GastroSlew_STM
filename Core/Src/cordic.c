@@ -26,6 +26,11 @@
 #include "stm32g4xx_hal.h"
 #include "stm32g4xx_hal_cordic.h"
 
+#define Q31_SCALE_F           2147483648.0f     // 2^31
+#define Q31_SCALE_INVERSE_F   4.656612873e-10f  // 2^-31
+#define Q31_TO_RAD_F          1.462918079e-9f   // pi / 2^31
+#define RAD_TO_Q31_F          6.835652755e8f    // 2^31 / pi
+
 /* USER CODE END 0 */
 
 CORDIC_HandleTypeDef hcordic;
@@ -118,20 +123,26 @@ void CORDIC_SetPhaseMode(void)
   HAL_CORDIC_Configure(&hcordic, &cfg);
 }
 
-static inline int32_t float_to_q31(float x)
+/*
+inline int32_t CORDIC_TRIG_TO_Q31(float x)
 {
-  if (x >= 1.0f)
+  if(x >= 1.0f)
     return INT32_MAX;
-
-  if (x <= -1.0f)
+  if(x <= -1.0f)
     return INT32_MIN;
 
   return (int32_t)(x * Q31_SCALE_F);
 }
+*/
 
-static inline float q31_to_float(int32_t x)
+int32_t CORDIC_RadToQ31(float angle_rad)
 {
-  return (float)x / Q31_SCALE_F;
+  return (int32_t)(angle_rad * RAD_TO_Q31_F);
+}
+
+float CORDIC_Q31ToTrig(int32_t x)
+{
+  return (float)x * Q31_SCALE_INVERSE_F;
 }
 
 static inline void CORDIC_Write(int32_t value)

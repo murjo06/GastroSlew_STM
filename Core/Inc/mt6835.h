@@ -17,5 +17,6 @@ bool MT6835_DataAvailable(void);
 void MT6835_Callback(void);
 
 int32_t MT6835_GetRawAngle(void);
+float MT6835_GetAngle(void);
 
 #endif

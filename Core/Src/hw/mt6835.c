@@ -3,7 +3,7 @@
 #include <string.h>
 #include "spi.h"
 
-#define MT6835_TIMEOUT 3
+#define MT6835_TIMEOUT      10
 
 volatile static int32_t angle_raw = 0;
 
@@ -51,6 +51,7 @@ HAL_StatusTypeDef MT6835_FetchAngle(void)
         return HAL_BUSY;
     }
     mt_available = false;
+
     CS_Low();
 
     return HAL_SPI_TransmitReceive_DMA(hspi, tx, rx, 6);
@@ -71,7 +72,10 @@ void MT6835_Callback(void)
 
 HAL_StatusTypeDef MT6835_FetchAngleSync(void)
 {
-    memset(rx, 0xFF, 6);
+    if(!mt_available) {
+        return HAL_BUSY;
+    }
+    mt_available = false;
 
     CS_Low();
 
@@ -80,6 +84,8 @@ HAL_StatusTypeDef MT6835_FetchAngleSync(void)
     angle_raw = ((int32_t)rx[2] << 13) | ((int32_t)rx[3] << 5)  | ((int32_t)rx[4] >> 3);
 
     CS_High();
+
+    mt_available = true;
 
     return status;
 }
@@ -92,4 +98,9 @@ bool MT6835_DataAvailable(void)
 int32_t MT6835_GetRawAngle(void)
 {
     return angle_raw;
+}
+
+float MT6835_GetAngle(void)
+{
+    return MT6835_RAW_TO_RAD_F * (float)angle_raw;
 }

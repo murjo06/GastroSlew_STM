@@ -237,9 +237,7 @@ void handle_serial(serial_t *s)		// s->buffer ne sme imet <>
 				                } case 'D': {	//* d
                                  	read_float_bytes(&(velocity_pid.kd), s->buffer + 4, *(s->length) - 4);
 				                	break;
-				                } case 'O': {
-									read_float_bytes(&iq_offset, s->buffer + 4, *(s->length) - 4);
-								} default: return;
+				                } default: return;
                             }
 							break;
                         } case 'D': {		//* d
