@@ -11,6 +11,13 @@
 
 
 extern float powers[VELOCITY_LOOP_PRESCALER];
+extern float iqs[VELOCITY_LOOP_PRESCALER];
+
+
+
+extern float iq_target;
+
+
 
 
 extern float delta;

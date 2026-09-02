@@ -17,15 +17,15 @@ void Resonant_Init(resonant_t *r, float frequency, float damping, float gain, fl
     float a2 = k2 - two_zeta_w_k + w02;
 
     float b0 = gain * k;
-    float b1 = 0.0f;
-    float b2 = -gain * k;
 
-    r->b0 = b0 / a0;
-    r->b1 = b1 / a0;
-    r->b2 = b2 / a0;
+	float a0_inv = 1.0f / a0;
 
-    r->a1 = a1 / a0;
-    r->a2 = a2 / a0;
+    r->b0 = b0 * a0_inv;
+    r->b1 = 0.0f;
+    r->b2 = -b0 * a0_inv;
+
+    r->a1 = a1 * a0_inv;
+    r->a2 = a2 * a0_inv;
 }
 
 float Resonant_GetOutput(resonant_t *r, float input)

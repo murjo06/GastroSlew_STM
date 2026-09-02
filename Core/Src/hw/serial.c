@@ -3,6 +3,7 @@
 #include "servo.h"
 #include "usbd_cdc_if.h"
 #include "usb_device.h"
+
 #include <stdint.h>
 
 UART_HandleTypeDef *huart;
@@ -73,6 +74,9 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *_huart, uint16_t size)
 
 HAL_StatusTypeDef UART_Serial_Print(const uint8_t *data, uint16_t length)
 {
+	if(length == 0) {
+		return HAL_BUSY;
+	}
 	memcpy(uart_tx_buffer, data, length);
     if(tx_busy) {
         return HAL_BUSY;
@@ -158,7 +162,7 @@ uint16_t u64ToDec(uint64_t value, uint8_t *buffer)
     return digits + 1;
 }
 
-static uint16_t u32ToHex(uint32_t value, uint8_t *buffer)
+static uint16_t u32ToHexLeadingZero(uint32_t value, uint8_t *buffer)
 {
     for(int i = 7; i >= 0; i--) {
         uint8_t digit = (value >> (i * 4)) & 0xF;
@@ -184,7 +188,7 @@ static void write_float_bytes(float *source, uint8_t *buffer, uint16_t *length)
 {
 	uint32_t float_buffer = 0;
 	memcpy(&float_buffer, source, sizeof(float));
-	u32ToHex(float_buffer, buffer);
+	u32ToHexLeadingZero(float_buffer, buffer);
 	buffer[8] = SERIAL_END_CHAR;
 	buffer[9] = '\0';
 	*length = 10;
@@ -195,173 +199,156 @@ void handle_serial(serial_t *s)		// s->buffer ne sme imet <>
     if(*(s->length) < 2) {
         return;
     }
+	memset(serial_tx_buffer, 0, UART_FRAME_MAX_LENGTH);
+    serial_tx_buffer[0] = SERIAL_START_CHAR;
+	uint16_t length = 0;
+
 	switch(s->buffer[0]) {
-		case 'S': {		//* set
+		case 'P': {			//* komandiarana lega
+            position_target = (int64_t)((hexToU64(s->buffer + 1, *(s->length) - 1)));
+			break;
+		} case 'V': {		//* komandirana hitrost
+			read_float_bytes(&velocity_target, s->buffer + 1, *(s->length) - 1);
+			break;
+		} case 'S': {		//* sinhroniziraj
+            position = (int64_t)((hexToU64(s->buffer + 1, *(s->length) - 1)));
+			break;
+		} case 'M': {		//* dovoljena moč
+			read_float_bytes(&maximum_power, s->buffer + 1, *(s->length) - 1);
+			break;
+		} case 'C': {		//* pid
 			switch(s->buffer[1]) {
-				case 'P': {			//* komandiarana lega
-                    target_position = (int64_t)((hexToU64(s->buffer + 2, *(s->length) - 2)));
-					break;
-				} case 'V': {		//* komandirana hitrost
-					read_float_bytes(&target_velocity, s->buffer + 2, *(s->length) - 2);
-					break;
-				} case 'S': {		//* sinhroniziraj
-                    position = (int64_t)((hexToU64(s->buffer + 2, *(s->length) - 2)));
-					break;
-				} case 'M': {		//* dovoljena moč
-					read_float_bytes(&maximum_power, s->buffer + 2, *(s->length) - 2);
-					break;
-				} case 'C': {		//* pid
-					switch(s->buffer[2]) {
-                        case 'P': {			//* pozicija
-                            switch(s->buffer[3]) {
-                                case 'P': {		//* p
-									read_float_bytes(&(position_pid.kp), s->buffer + 4, *(s->length) - 4);
-				                	break;
-				                } case 'I': {	//* i
-                                 	read_float_bytes(&(position_pid.ki), s->buffer + 4, *(s->length) - 4);
-				                	break;
-				                } case 'D': {	//* d
-                                 	read_float_bytes(&(position_pid.kd), s->buffer + 4, *(s->length) - 4);
-				                	break;
-				                } default: return;
-                            }
-							break;
-                        } case 'V': {		//* hitrost
-							switch(s->buffer[3]) {
-                                case 'P': {		//* p
-                                 	read_float_bytes(&(velocity_pid.kp), s->buffer + 4, *(s->length) - 4);
-				                	break;
-				                } case 'I': {	//* i
-                                 	read_float_bytes(&(velocity_pid.ki), s->buffer + 4, *(s->length) - 4);
-				                	break;
-				                } case 'D': {	//* d
-                                 	read_float_bytes(&(velocity_pid.kd), s->buffer + 4, *(s->length) - 4);
-				                	break;
-				                } default: return;
-                            }
-							break;
-                        } case 'D': {		//* d
-							switch(s->buffer[3]) {
-                                case 'P': {		//* p
-                                 	read_float_bytes(&(d_pid.kp), s->buffer + 4, *(s->length) - 4);
-				                	break;
-				                } case 'I': {	//* i
-                                 	read_float_bytes(&(d_pid.ki), s->buffer + 4, *(s->length) - 4);
-				                	break;
-				                } default: return;
-                            }
-							break;
-                        } case 'Q': {		//* q
-							switch(s->buffer[3]) {
-                                case 'P': {		//* p
-                                 	read_float_bytes(&(q_pid.kp), s->buffer + 4, *(s->length) - 4);
-				                	break;
-				                } case 'I': {	//* i
-                                 	read_float_bytes(&(q_pid.ki), s->buffer + 4, *(s->length) - 4);
-				                	break;
-				                } default: return;
-                            }
-							break;
-                        } default: return;
+                case 'P': {			//* pozicija
+                    switch(s->buffer[2]) {
+                        case 'P': {		//* p
+							read_float_bytes(&(position_pid.kp), s->buffer + 3, *(s->length) - 3);
+		                	break;
+		                } case 'I': {	//* i
+                         	read_float_bytes(&(position_pid.ki), s->buffer + 3, *(s->length) - 3);
+		                	break;
+		                } case 'D': {	//* d
+                         	read_float_bytes(&(position_pid.kd), s->buffer + 3, *(s->length) - 3);
+		                	break;
+		                } default: return;
                     }
 					break;
-				} default: return;
-			}
-			break;
-		} case 'G': {	//* get
-			memset(serial_tx_buffer, 0, UART_FRAME_MAX_LENGTH);
-            serial_tx_buffer[0] = SERIAL_START_CHAR;
-			uint16_t length = 0;
-			switch(s->buffer[1]) {
-				case 'P': {			//* komandirana lega
-                    u64ToHex(target_position, serial_tx_buffer + 1);
-					serial_tx_buffer[10] = SERIAL_END_CHAR;
-					serial_tx_buffer[11] = '\0';
-					length = 18;
+                } case 'V': {		//* hitrost
+					switch(s->buffer[2]) {
+                        case 'P': {		//* p
+                         	read_float_bytes(&(velocity_pid.kp), s->buffer + 3, *(s->length) - 3);
+		                	break;
+		                } case 'I': {	//* i
+                         	read_float_bytes(&(velocity_pid.ki), s->buffer + 3, *(s->length) - 3);
+		                	break;
+		                } default: return;
+                    }
 					break;
-				} case 'V': {		//* komandirana hitrost
-					write_float_bytes(&target_velocity, serial_tx_buffer + 1, &length);
+                } case 'D': {		//* d
+					switch(s->buffer[2]) {
+                        case 'P': {		//* p
+                         	read_float_bytes(&(d_pid.kp), s->buffer + 3, *(s->length) - 3);
+		                	break;
+		                } case 'I': {	//* i
+                         	read_float_bytes(&(d_pid.ki), s->buffer + 3, *(s->length) - 3);
+		                	break;
+		                } default: return;
+                    }
 					break;
-				} case 'S': {		//* trenutna pozicija
-                    u64ToHex(position, serial_tx_buffer + 1);
-					serial_tx_buffer[10] = SERIAL_END_CHAR;
-					serial_tx_buffer[11] = '\0';
-					length = 18;
-					break;
-				} case 'M': {		//* dovoljena moč
-					write_float_bytes(&maximum_power, serial_tx_buffer + 1, &length);
-					break;
-				} case 'C': {       //* pid
-                    switch(s->buffer[2]) {
-                        case 'P': {			//* pozicija
-                            switch(s->buffer[3]) {
-                                case 'P': {		//* p
-                                 	write_float_bytes(&(position_pid.kp), serial_tx_buffer + 1, &length);
-				                	break;
-				                } case 'I': {	//* i
-                                 	write_float_bytes(&(position_pid.ki), serial_tx_buffer + 1, &length);
-				                	break;
-				                } case 'D': {	//* d
-                                 	write_float_bytes(&(position_pid.kd), serial_tx_buffer + 1, &length);
-				                	break;
-				                } default: return;
-                            }
-							break;
-                        } case 'V': {		//* hitrost
-							switch(s->buffer[3]) {
-                                case 'P': {		//* p
-                                 	write_float_bytes(&(velocity_pid.kp), serial_tx_buffer + 1, &length);
-				                	break;
-				                } case 'I': {	//* i
-                                 	write_float_bytes(&(velocity_pid.ki), serial_tx_buffer + 1, &length);
-				                	break;
-				                } case 'D': {	//* d
-                                 	write_float_bytes(&(velocity_pid.kd), serial_tx_buffer + 1, &length);
-				                	break;
-				                } default: return;
-                            }
-							break;
-                        } case 'D': {		//* d
-							switch(s->buffer[3]) {
-                                case 'P': {		//* p
-                                 	write_float_bytes(&(d_pid.kp), serial_tx_buffer + 1, &length);
-				                	break;
-				                } case 'I': {	//* i
-                                 	write_float_bytes(&(d_pid.ki), serial_tx_buffer + 1, &length);
-				                	break;
-				                } default: return;
-                            }
-							break;
-                        } case 'Q': {		//* q
-							switch(s->buffer[3]) {
-                                case 'P': {		//* p
-                                 	write_float_bytes(&(q_pid.kp), serial_tx_buffer + 1, &length);
-				                	break;
-				                } case 'I': {	//* i
-                                 	write_float_bytes(&(q_pid.ki), serial_tx_buffer + 1, &length);
-				                	break;
-				                } default: return;
-                            }
-							break;
-                        } default: return;
+                } case 'Q': {		//* q
+					switch(s->buffer[2]) {
+                        case 'P': {		//* p
+                         	read_float_bytes(&(q_pid.kp), s->buffer + 3, *(s->length) - 3);
+		                	break;
+		                } case 'I': {	//* i
+                         	read_float_bytes(&(q_pid.ki), s->buffer + 3, *(s->length) - 3);
+		                	break;
+		                } default: return;
                     }
 					break;
                 } default: return;
-			}
-			s->print(serial_tx_buffer, length);
+            }
 			break;
-		} case 'A': {		//* abort
-			break;			//todo
-        } case 'P': {		//* ping
-			uint8_t buffer[4];
-			buffer[0] = SERIAL_START_CHAR;
-			buffer[1] = 'P';
-			buffer[2] = SERIAL_END_CHAR;
-			buffer[3] = '\0';
-			s->print(buffer, 3);
-		} case 'R': {		//* resetiraj
-			target_velocity = 0.0f;		//todo: reset za pozicijo
+		}
+		case 'p': {			//* komandirana lega
+            u64ToHex(position_target, serial_tx_buffer + 1);
+			serial_tx_buffer[10] = SERIAL_END_CHAR;
+			serial_tx_buffer[11] = '\0';
+			length = 11;
+			break;
+		} case 'v': {		//* komandirana hitrost
+			write_float_bytes(&velocity_target, serial_tx_buffer + 1, &length);
+			break;
+		} case 's': {		//* trenutna pozicija
+            u64ToHex(position, serial_tx_buffer + 1);
+			serial_tx_buffer[10] = SERIAL_END_CHAR;
+			serial_tx_buffer[11] = '\0';
+			length = 11;
+			break;
+		} case 'm': {		//* dovoljena moč
+			write_float_bytes(&maximum_power, serial_tx_buffer + 1, &length);
+			break;
+		} case 'c': {       //* pid
+            switch(s->buffer[1]) {
+                case 'P': {			//* pozicija
+                    switch(s->buffer[2]) {
+                        case 'P': {		//* p
+                         	write_float_bytes(&(position_pid.kp), serial_tx_buffer + 1, &length);
+		                	break;
+		                } case 'I': {	//* i
+                         	write_float_bytes(&(position_pid.ki), serial_tx_buffer + 1, &length);
+		                	break;
+		                } case 'D': {	//* d
+                         	write_float_bytes(&(position_pid.kd), serial_tx_buffer + 1, &length);
+		                	break;
+		                } default: return;
+                    }
+					break;
+                } case 'V': {		//* hitrost
+					switch(s->buffer[2]) {
+                        case 'P': {		//* p
+                         	write_float_bytes(&(velocity_pid.kp), serial_tx_buffer + 1, &length);
+		                	break;
+		                } case 'I': {	//* i
+                         	write_float_bytes(&(velocity_pid.ki), serial_tx_buffer + 1, &length);
+		                	break;
+		                } default: return;
+                    }
+					break;
+                } case 'D': {		//* d
+					switch(s->buffer[2]) {
+                        case 'P': {		//* p
+                         	write_float_bytes(&(d_pid.kp), serial_tx_buffer + 1, &length);
+		                	break;
+		                } case 'I': {	//* i
+                         	write_float_bytes(&(d_pid.ki), serial_tx_buffer + 1, &length);
+		                	break;
+		                } default: return;
+                    }
+					break;
+                } case 'Q': {		//* q
+					switch(s->buffer[2]) {
+                        case 'P': {		//* p
+                         	write_float_bytes(&(q_pid.kp), serial_tx_buffer + 1, &length);
+		                	break;
+		                } case 'I': {	//* i
+                         	write_float_bytes(&(q_pid.ki), serial_tx_buffer + 1, &length);
+		                	break;
+		                } default: return;
+                    }
+					break;
+                } default: return;
+            }
+			break;
+		} case 'a': {		//* ack
+			serial_tx_buffer[1] = 'a';
+			serial_tx_buffer[2] = SERIAL_END_CHAR;
+			serial_tx_buffer[3] = '\0';
+			length = 3;
+			break;
 		} default: return;
+	}
+	if(length != 0) {
+		s->print(serial_tx_buffer, length);
 	}
 	*(s->length) = 0;
 }

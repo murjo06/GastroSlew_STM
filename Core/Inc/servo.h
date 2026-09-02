@@ -5,12 +5,12 @@
 #include "pid.h"
 
 extern float velocity;
-extern float target_velocity;
+extern float velocity_target;
 
 extern float iq_offset;
 
 extern int64_t position;
-extern int64_t target_position;
+extern int64_t position_target;
 
 extern pid_t position_pid;
 extern pid_t velocity_pid;

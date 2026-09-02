@@ -1,6 +1,7 @@
 #pragma once
 
 #include "stm32g4xx_hal.h"
+
 #include <stdint.h>
 
 
@@ -19,8 +20,9 @@
 #define IQ_MAX						5.0f
 #define TORQUE_CUTOFF_FREQUENCY		3.5f		// Hz
 
+#define MAX_ACCELERATION			5.0f		// rad/s^2
+
 #define COMPENSATION_GAIN			0.03f
-//#define COMPENSATION_CUTOFF		5.0f		// Hz, cutoff za LPF
 #define COMPENSATION_PHASE_SHIFT	0.8f
 #define COMPENSATION_FREQUENCY_MAX	0.3f		// Hz, frekvenca, pri kateri je največja sprememba faze
 

@@ -60,6 +60,9 @@ void USB_CDC_Process(uint8_t *data, uint16_t size)
 
 HAL_StatusTypeDef USB_Serial_Print(const uint8_t *data, uint16_t length)
 {
+    if(length == 0) {
+        return HAL_BUSY;
+    }
     memcpy(usb_tx_buffer, data, length);
     if(tx_busy_usb) {
         return HAL_BUSY;

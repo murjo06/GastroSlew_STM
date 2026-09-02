@@ -35,8 +35,8 @@ void StepDir_Loop(void)
         return;
     }
     if(HAL_GPIO_ReadPin(DIR_PORT, DIR_PIN)) {
-        target_position += delta;
+        position_target += delta;
     } else {
-        target_position -= delta;
+        position_target -= delta;
     }
 }

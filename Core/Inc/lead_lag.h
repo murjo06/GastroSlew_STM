@@ -10,7 +10,7 @@ typedef struct {
     float b1;
 } lead_lag_t;
 
-void LeadLag_Init(lead_lag_t *l, float gain, float f_z, float f_p, float sample_period);
+void LeadLag_Init(lead_lag_t *l, float gain, float crossover_frequency, float phase_shift, float sample_period);
 
 float LeadLag_GetOutput(lead_lag_t *l, float error);
 

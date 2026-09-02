@@ -36,11 +36,12 @@ float maximum_power = 10.0f;		// v vatih
 
 
 
-float powers[VELOCITY_LOOP_PRESCALER];
+float powers[VELOCITY_LOOP_PRESCALER] = {0.0f};
 uint16_t power_series = 0;
 
 
 
+float iq_target = 0.0f;
 
 
 float iq_reference = 4.0f;
@@ -254,6 +255,7 @@ void FOC_Loop()
 
 	//while(!MT6835_DataAvailable()) {}
 
+	//* inkrementacija pozicije
 	int32_t encoder_position = MT6835_GetRawAngle();
 	int32_t encoder_diff = encoder_position - prev_encoder_position;
 
@@ -273,21 +275,23 @@ void FOC_Loop()
     	raw_angle += (1 << 21);
 	}
 
+	//* električni kot
 	float encoder_ff = (float)POLE_PAIRS * velocity * (float)(DWT->CYCCNT - encoder_read_cycle) * 5.88235294e-9f;
-	electrical_angle = wrap_pi(encoder_ff - MT6835_RAW_TO_RAD_F * (float)(POLE_PAIRS * (raw_angle)));	// enkoder se prebere pol cikla prej
+	electrical_angle = wrap_pi(-MT6835_RAW_TO_RAD_F * (float)(POLE_PAIRS * (raw_angle)) + encoder_ff);	// enkoder se prebere pol cikla prej
 
-	//* park transformacija
-	float setpoint_difference = setpoint_velocity * d_pid.dt;
+	/*
+	*float setpoint_difference = setpoint_velocity * d_pid.dt;
 
-	setpoint_angle += setpoint_difference;
-	if(setpoint_angle < 0.0f) {
-		setpoint_angle += TWO_PI_F;
-	}
-	setpoint_angle = wrap_pi(setpoint_angle);
+	*setpoint_angle += setpoint_difference;
+	*if(setpoint_angle < 0.0f) {
+	*	setpoint_angle += TWO_PI_F;
+	*}
+	*setpoint_angle = wrap_pi(setpoint_angle);
 
-	delta = wrap_pi(setpoint_angle - electrical_angle);
+	*delta = wrap_pi(setpoint_angle - electrical_angle);
 
-	setpoint_angle = wrap_pi(electrical_angle + delta);
+	*setpoint_angle = wrap_pi(electrical_angle + delta);
+	*/
 
 	/*
 	float delta_2 = wrap_pi(setpoint_angle - electrical_angle);
@@ -307,6 +311,7 @@ void FOC_Loop()
 	}
 	*/
 
+	//* park transformacija
 	CORDIC_SinCos(CORDIC_RadToQ31(electrical_angle), &s, &c);
 
 	float sin_electrical = CORDIC_Q31ToTrig(s);
@@ -317,15 +322,15 @@ void FOC_Loop()
     //* dq pi-ja
 	vd = PID_GetOutput(&d_pid, 0.0f - id);
 
-	float iq_target = LPF_GetOutput(&iq_lpf, iq_reference * delta + iq_compensation);
+	float iq_lpf_output = LPF_GetOutput(&iq_lpf, iq_reference * delta + iq_compensation);
 
-	if(iq_target > IQ_MAX) {
-		setpoint_angle -= setpoint_difference;
-		iq_target = IQ_MAX;
+	if(iq_lpf_output > IQ_MAX) {
+		//* setpoint_angle -= setpoint_difference;
+		iq_lpf_output = IQ_MAX;
 		iq_saturated = true;
-	} else if(iq_target < -IQ_MAX) {
-		setpoint_angle -= setpoint_difference;
-		iq_target = -IQ_MAX;
+	} else if(iq_lpf_output < -IQ_MAX) {
+		//* setpoint_angle -= setpoint_difference;
+		iq_lpf_output = -IQ_MAX;
 		iq_saturated = true;
 	}
 
@@ -391,17 +396,6 @@ void FOC_Loop()
 		PID_Reset(&q_pid);
 		return;
 	}
-
-	/*
-	float id_target_diff = id_target - used_id_target;
-	if(absf(id_target_diff) > 0.01f) {
-		used_id_target += (float)signf(id_target_diff) * id_rate * d_pid.dt;
-
-		used_id_target = max(-id_target, min(used_id_target, id_target));
-	} else if(used_id_target != id_target) {
-		used_id_target = id_target;
-	}
-	*/
 
 	int16_t tim_a = (int16_t)(da * (float)TIM1->ARR);
 	int16_t tim_b = (int16_t)(db * (float)TIM1->ARR);
