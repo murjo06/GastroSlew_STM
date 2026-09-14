@@ -15,6 +15,10 @@ extern int64_t position_target;
 extern pid_t position_pid;
 extern pid_t velocity_pid;
 
+extern pid_t compensation_pid;
+
+extern const float velocity_sampling_period;
+
 void Servo_Init(void);
 
 void servo_reset_pid(void);

@@ -14,7 +14,6 @@ static inline void CS_Delay(void)
 static inline void CS_Low(void)
 {
     CS_GATE_PORT->BRR = (uint32_t)CS_GATE_PIN;
-    //HAL_GPIO_WritePin(CS_GATE_PORT, CS_GATE_PIN, GPIO_PIN_RESET);
     CS_Delay();
 }
 
@@ -22,7 +21,6 @@ static inline void CS_High(void)
 {
     CS_Delay();
     CS_GATE_PORT->BSRR = (uint32_t)CS_GATE_PIN;
-    //HAL_GPIO_WritePin(CS_GATE_PORT, CS_GATE_PIN, GPIO_PIN_SET);
 }
 
 HAL_StatusTypeDef DRV8323_ReadRegister(uint8_t reg, uint16_t *data)
@@ -65,6 +63,8 @@ HAL_StatusTypeDef DRV8323_Init(SPI_HandleTypeDef *_hspi)
     hspi = _hspi;
 
     CS_High();
+
+    HAL_Delay(10);
 
     return 1;
 

@@ -8,7 +8,7 @@
 
 UART_HandleTypeDef *huart;
 uint8_t dma_buffer[UART_DMA_RX_BUFFER_SIZE];
-uint8_t frame_buffer[UART_FRAME_MAX_LENGTH];
+uint8_t frame_buffer[SERIAL_MAX_SIZE];
 uint16_t frame_index;
 uint16_t frame_length;
 bool rx_busy;
@@ -18,9 +18,9 @@ volatile bool *frame_ready;
 serial_t uart_serial;
 serial_t usb_serial;
 
-static uint8_t serial_tx_buffer[UART_FRAME_MAX_LENGTH];
+static uint8_t serial_tx_buffer[SERIAL_MAX_SIZE];
 
-static uint8_t uart_tx_buffer[UART_FRAME_MAX_LENGTH];
+static uint8_t uart_tx_buffer[SERIAL_MAX_SIZE];
 
 static const uint8_t hex_chars[] = "0123456789abcdef";
 
@@ -50,7 +50,7 @@ void UART_DMA_Process(uint16_t size)
             continue;
         }
         if(tx_busy) {
-            if(frame_index < UART_FRAME_MAX_LENGTH) {
+            if(frame_index < SERIAL_MAX_SIZE) {
                 frame_buffer[frame_index++] = byte;
             } else {
                 tx_busy = false;
@@ -99,6 +99,7 @@ void UART_Serial_Init(UART_HandleTypeDef *_huart, volatile bool *ready)
 	uart_serial.buffer = frame_buffer;
 	uart_serial.length = &frame_length;
 	uart_serial.print = UART_Serial_Print;
+
     huart = _huart;
 	frame_ready = ready;
 
@@ -199,7 +200,7 @@ void handle_serial(serial_t *s)		// s->buffer ne sme imet <>
     if(*(s->length) < 2) {
         return;
     }
-	memset(serial_tx_buffer, 0, UART_FRAME_MAX_LENGTH);
+	memset(serial_tx_buffer, 0, SERIAL_MAX_SIZE);
     serial_tx_buffer[0] = SERIAL_START_CHAR;
 	uint16_t length = 0;
 
@@ -235,10 +236,12 @@ void handle_serial(serial_t *s)		// s->buffer ne sme imet <>
                 } case 'V': {		//* hitrost
 					switch(s->buffer[2]) {
                         case 'P': {		//* p
-                         	read_float_bytes(&(velocity_pid.kp), s->buffer + 3, *(s->length) - 3);
+                         	read_float_bytes(&(compensation_pid.kp), s->buffer + 3, *(s->length) - 3);
 		                	break;
 		                } case 'I': {	//* i
-                         	read_float_bytes(&(velocity_pid.ki), s->buffer + 3, *(s->length) - 3);
+							float ki = 0.0f;
+                         	read_float_bytes(&ki, s->buffer + 3, *(s->length) - 3);
+							velocity_pid.kp = ki - 1.0f;
 		                	break;
 		                } default: return;
                     }

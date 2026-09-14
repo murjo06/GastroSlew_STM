@@ -14,17 +14,18 @@
 #include <string.h>
 #include <stdint.h>
 
-ADC_HandleTypeDef *hadcA;
-ADC_HandleTypeDef *hadcB;
-ADC_HandleTypeDef *hadcC;
+static ADC_HandleTypeDef *hadcA;
+static ADC_HandleTypeDef *hadcB;
+static ADC_HandleTypeDef *hadcC;
 
-uint16_t adc_a[FOC_LOOP_PRESCALER];
-uint16_t adc_b[FOC_LOOP_PRESCALER];
-uint16_t adc_c[FOC_LOOP_PRESCALER];
+static volatile uint16_t adc_a;
+static volatile uint16_t adc_b;
+static volatile uint16_t adc_c;
 
-uint8_t adc_a_index = 0;
-uint8_t adc_b_index = 0;
-uint8_t adc_c_index = 0;
+static float adc_a_zero = 0.0f;
+static float adc_b_zero = 0.0f;
+static float adc_c_zero = 0.0f;
+static uint32_t adc_avg_index = 0;
 
 float ia = 0.0f;
 float ib = 0.0f;
@@ -34,15 +35,17 @@ float v_bus = 0.0f;
 float maximum_power = 10.0f;		// v vatih
 
 
-
-
 float powers[VELOCITY_LOOP_PRESCALER] = {0.0f};
 uint16_t power_series = 0;
+float iqs[VELOCITY_LOOP_PRESCALER] = {0.0f};
 
 
+lpf_t iq_lpf;
 
-float iq_target = 0.0f;
+pid_t q_pid;
+pid_t d_pid;
 
+float used_iq_target = 0.0f;
 
 float iq_reference = 4.0f;
 float iq_compensation = 0.0f;
@@ -52,8 +55,6 @@ bool iq_saturated = false;
 
 float setpoint_angle = 0.0f;
 float setpoint_velocity = 0.0f;
-
-float electrical_angle = 0.0f;
 
 
 static float deadtime_compensation_voltage = 0.0f;
@@ -65,12 +66,7 @@ volatile bool b_ready = false;
 volatile bool c_ready = false;
 
 uint16_t position_counter = POSITION_LOOP_PRESCALER - 1;
-uint16_t velocity_counter = VELOCITY_LOOP_PRESCALER - 2;	// hitrost je iz faze s pozicijo
-
-pid_t q_pid;
-pid_t d_pid;
-
-lpf_t iq_lpf;
+uint16_t velocity_counter = VELOCITY_LOOP_PRESCALER - 1;
 
 static float i_alpha = 0.0f;
 static float i_beta = 0.0f;
@@ -89,10 +85,12 @@ static uint16_t loop_start_counter = 0;
 
 static int32_t prev_encoder_position = 0;
 
+static const float foc_loop_period = (float)(2 * TIM_PERIOD + 1) / 170e6f;
+
 void static inline clarke_transform(float _ia, float _ib, float _ic, float *_i_alpha, float *_i_beta)
 {
     *_i_alpha = _ia;
-    *_i_beta = INVERSE_ROOT_THREE_F * (_ib - _ic);
+    *_i_beta = ROOT_THREE_INVERSE_F * (_ib - _ic);
 }
 
 void inverse_clarke_transform(float _v_alpha, float _v_beta, float *_va, float *_vb, float *_vc)
@@ -114,12 +112,12 @@ void inverse_park_transform(float _vd, float _vq, float _s, float _c, float *_v_
 	*_v_beta = _vd * _s + _vq * _c;
 }
 
-static inline float adc_to_i(int16_t adc)
+static inline float adc_to_i(float adc)
 {
 #ifdef RA
-	return -3.934337267e-3f * (float)adc;		// Vref / ((2^12 - 1) * gain * R_sense), R_sense je 9 mO
+	return -3.934337267e-3f * adc;		// Vref / ((2^12 - 1) * gain * R_sense), R_sense je 9 mO
 #else
-	return 3.934337267e-3f * (float)adc;
+	return 3.934337267e-3f * adc;
 #endif
 }
 
@@ -140,36 +138,42 @@ static float deadtime_compensation(float i)
 	return k * deadtime_compensation_voltage;
 }
 
+void FOC_Calibrate_ADCs(void)
+{
+	while (!(a_ready && b_ready && c_ready)) {}
+    a_ready = false; b_ready = false; c_ready = false;
+
+    adc_avg_index++;
+
+    adc_a_zero += ((float)adc_a - adc_a_zero) / (float)adc_avg_index;
+    adc_b_zero += ((float)adc_b - adc_b_zero) / (float)adc_avg_index;
+    adc_c_zero += ((float)adc_c - adc_c_zero) / (float)adc_avg_index;
+}
+
 void FOC_ADC_Callback(ADC_HandleTypeDef *hadc)
 {
 	if(hadc == hadcA) {
-		adc_a[adc_a_index] = hadcA->Instance->JDR1;
+		adc_a = hadcA->Instance->JDR1;
 		a_ready = true;
-		if(++adc_a_index >= FOC_LOOP_PRESCALER) {
-			adc_a_index = 0;
-		}
 	} else if(hadc == hadcB) {
-		adc_b[adc_b_index] = hadcB->Instance->JDR1;
+		adc_b = hadcB->Instance->JDR1;
 		b_ready = true;
-		if(++adc_b_index >= FOC_LOOP_PRESCALER) {
-			adc_b_index = 0;
-		}
 	} else if(hadc == hadcC) {
-		adc_c[adc_c_index] = hadcC->Instance->JDR1;
+		adc_c = hadcC->Instance->JDR1;
 		c_ready = true;
-		if(++adc_c_index >= FOC_LOOP_PRESCALER) {
-			adc_c_index = 0;
-		}
 	}
 }
 
-static int16_t adc_average(uint16_t *data, uint16_t size)
+static void set_setpoint_angle(void)
 {
-	uint32_t sum = 0.0f;
-	for(uint16_t i = 0; i < size; i++) {
-		sum += (uint32_t)(data[i]);
+	int32_t raw_angle = MT6835_GetRawAngle() - (int32_t)ENCODER_ANGLE_OFFSET;
+	if(raw_angle > (1 << 20)) {
+    	raw_angle -= (1 << 21);
+	} else if(raw_angle < -(1 << 20)) {
+    	raw_angle += (1 << 21);
 	}
-	return (int16_t)(0.5f + (float)sum / (float)size);
+	float electrical_angle = wrap_pi(- MT6835_RAW_TO_RAD_F * (float)(POLE_PAIRS * (raw_angle)));
+	setpoint_angle = electrical_angle;
 }
 
 void FOC_Init(ADC_HandleTypeDef *_hadcA, ADC_HandleTypeDef *_hadcB, ADC_HandleTypeDef *_hadcC)
@@ -181,26 +185,17 @@ void FOC_Init(ADC_HandleTypeDef *_hadcA, ADC_HandleTypeDef *_hadcB, ADC_HandleTy
 	PID_Init(&d_pid, 0.375f, 2205.0f, 0.0f);
 	PID_Init(&q_pid, 0.375f, 2205.0f, 0.0f);
 
-	LPF_Init(&iq_lpf, TORQUE_CUTOFF_FREQUENCY, (float)(2L * TIM_PERIOD + 1L) / 170e6f);
+	LPF_Init(&iq_lpf, 30.0f, foc_loop_period);
 
-	for(int i = 0; i < FOC_LOOP_PRESCALER; i++) {
-	    adc_a[i] = 0x7fb;
-	    adc_b[i] = 0x7fa;
-	    adc_c[i] = 0x7fc;
-	}
+	adc_a = 0x7fb;
+	adc_b = 0x7fb;
+	adc_c = 0x7fb;
 
 	HAL_ADC_Start(&hadc4);
 
 	MT6835_FetchAngleSync();
 
-	int32_t raw_angle = MT6835_GetRawAngle() - (int32_t)ENCODER_ANGLE_OFFSET;
-	if(raw_angle > (1 << 20)) {
-    	raw_angle -= (1 << 21);
-	} else if(raw_angle < -(1 << 20)) {
-    	raw_angle += (1 << 21);
-	}
-	electrical_angle = wrap_pi(- MT6835_RAW_TO_RAD_F * (float)(POLE_PAIRS * (raw_angle)));
-	setpoint_angle = electrical_angle;
+	set_setpoint_angle();
 
 	HAL_ADC_PollForConversion(&hadc4, 10);
 	get_v_bus();
@@ -208,27 +203,35 @@ void FOC_Init(ADC_HandleTypeDef *_hadcA, ADC_HandleTypeDef *_hadcB, ADC_HandleTy
 
 void FOC_Loop()
 {
-	if(!enabled) {
-		servo_reset_pid();
-		PID_Reset(&d_pid);
-		PID_Reset(&q_pid);
-	}
-
 	if(velocity_counter + 1 >= VELOCITY_LOOP_PRESCALER) {
 		velocity = calculate_current_velocity();
 	}
 
-	if(EN_PORT->IDR & EN_PIN) {
+	get_v_bus();
+	HAL_ADC_Start(&hadc4);
+
+	if (!(EN_PORT->IDR & EN_PIN) || v_bus < UVLO) {
+	    enabled = false;
+		TIM1->BDTR &= ~TIM_BDTR_MOE;		// izklopi tim1 izhode
+
+		set_setpoint_angle();
+
+	    servo_reset_pid();
+
+		PID_Reset(&d_pid);
+		PID_Reset(&q_pid);
+		LPF_Reset(&iq_lpf);
+
+	    return;
+	}
+
+	if(!enabled) {
 		enabled = true;
-	} else {
-		enabled = false;
-		return;
+		TIM1->BDTR |= TIM_BDTR_MOE;			// vklopi tim1 izhode
 	}
 
 	//* druga pida
     if(++position_counter >= POSITION_LOOP_PRESCALER) {
-		get_v_bus();
-		HAL_ADC_Start(&hadc4);
         calculate_position_pid();
         position_counter = 0;
     }
@@ -240,9 +243,9 @@ void FOC_Loop()
 	while(!(a_ready && b_ready && c_ready)) {}
 	a_ready = false; b_ready = false; c_ready = false;
 
-	ia = adc_to_i(adc_average(adc_a, FOC_LOOP_PRESCALER) - 0x7fb);		//todo: kalibracija offsetov pri startupu?
-	ib = adc_to_i(adc_average(adc_b, FOC_LOOP_PRESCALER) - 0x7fa);
-	ic = adc_to_i(adc_average(adc_c, FOC_LOOP_PRESCALER) - 0x7fc);
+	ia = adc_to_i((float)adc_a - adc_a_zero);
+	ib = adc_to_i((float)adc_b - adc_b_zero);
+	ic = adc_to_i((float)adc_c - adc_c_zero);
 
 	float i_avg = (ia + ib + ic) * 0.333333333f;
 
@@ -277,39 +280,15 @@ void FOC_Loop()
 
 	//* električni kot
 	float encoder_ff = (float)POLE_PAIRS * velocity * (float)(DWT->CYCCNT - encoder_read_cycle) * 5.88235294e-9f;
-	electrical_angle = wrap_pi(-MT6835_RAW_TO_RAD_F * (float)(POLE_PAIRS * (raw_angle)) + encoder_ff);	// enkoder se prebere pol cikla prej
+	float electrical_angle = wrap_pi(-MT6835_RAW_TO_RAD_F * (float)(POLE_PAIRS * (raw_angle)) + encoder_ff);	// enkoder se prebere pol cikla prej
+	
+	float setpoint_difference = setpoint_velocity * foc_loop_period;
 
-	/*
-	*float setpoint_difference = setpoint_velocity * d_pid.dt;
+	setpoint_angle = wrap_pi(setpoint_angle + setpoint_difference);
 
-	*setpoint_angle += setpoint_difference;
-	*if(setpoint_angle < 0.0f) {
-	*	setpoint_angle += TWO_PI_F;
-	*}
-	*setpoint_angle = wrap_pi(setpoint_angle);
+	delta = wrap_pi(setpoint_angle - electrical_angle);
 
-	*delta = wrap_pi(setpoint_angle - electrical_angle);
-
-	*setpoint_angle = wrap_pi(electrical_angle + delta);
-	*/
-
-	/*
-	float delta_2 = wrap_pi(setpoint_angle - electrical_angle);
-
-	if(delta_2 > DELTA_MAX) {
-		if(!iq_saturated) {
-			setpoint_angle -= setpoint_difference;
-		}
-		delta_2 = DELTA_MAX;
-		iq_saturated = true;
-	} else if(delta_2 < -DELTA_MAX) {
-		if(!iq_saturated) {
-			setpoint_angle -= setpoint_difference;
-		}
-		delta_2 = -DELTA_MAX;
-		iq_saturated = true;
-	}
-	*/
+	setpoint_angle = wrap_pi(electrical_angle + delta);
 
 	//* park transformacija
 	CORDIC_SinCos(CORDIC_RadToQ31(electrical_angle), &s, &c);
@@ -322,23 +301,33 @@ void FOC_Loop()
     //* dq pi-ja
 	vd = PID_GetOutput(&d_pid, 0.0f - id);
 
-	float iq_lpf_output = LPF_GetOutput(&iq_lpf, iq_reference * delta + iq_compensation);
+	float iq_target = (delta * iq_reference) + iq_compensation;
 
-	if(iq_lpf_output > IQ_MAX) {
-		//* setpoint_angle -= setpoint_difference;
-		iq_lpf_output = IQ_MAX;
+	iq_target = LPF_GetOutput(&iq_lpf, iq_target);
+
+	float max_iq_step = IQ_MAX_RISE * d_pid.dt;
+	float iq_diff = iq_target - used_iq_target;
+	if (absf(iq_diff) <= max_iq_step) {
+	    used_iq_target = iq_target;
+	} else {
+	    used_iq_target += signf(iq_diff) * max_iq_step;
+	}
+
+	if(used_iq_target > IQ_MAX) {
+		setpoint_angle = wrap_pi(setpoint_angle - setpoint_difference);
+		used_iq_target = IQ_MAX;
 		iq_saturated = true;
-	} else if(iq_lpf_output < -IQ_MAX) {
-		//* setpoint_angle -= setpoint_difference;
-		iq_lpf_output = -IQ_MAX;
+	} else if(used_iq_target < -IQ_MAX) {
+		setpoint_angle = wrap_pi(setpoint_angle - setpoint_difference);
+		used_iq_target = -IQ_MAX;
 		iq_saturated = true;
 	}
 
-	vq = PID_GetOutput(&q_pid, iq_target - iq);		// pozitiven iq je navor CCW
+	vq = PID_GetOutput(&q_pid, used_iq_target - iq);		// pozitiven iq je navor CCW
 
 	//* omejitev napetosti
 	float v_ref2 = vd*vd + vq*vq;
-	float v_peak = v_bus * INVERSE_ROOT_THREE_F;
+	float v_peak = v_bus * ROOT_THREE_INVERSE_F;
 	float v_peak2 = v_peak * v_peak;
 	if(v_ref2 > v_peak2) {
 		float scale = v_peak / sqrtf(v_ref2);
@@ -355,6 +344,7 @@ void FOC_Loop()
 		power_series = 0;
 	}
 	powers[power_series] = power;
+	iqs[power_series] = iq;
 	if(power > maximum_power) {					//? to je trenutna moč, mogoče dej povprečje?
 		//float scale = maximum_power / power;
 		//vd *= scale;
@@ -383,19 +373,19 @@ void FOC_Loop()
     float db = fminf(fmaxf(0.5f + vb / v_bus, 0.0f), 1.0f);
     float dc = fminf(fmaxf(0.5f + vc / v_bus, 0.0f), 1.0f);
 
-	if(v_bus < UVLO) {
-		d_pid.integral = 0.0f;
-		q_pid.integral = 0.0f;
-		return;
-	}
-
+	/*
 	if(loop_start_counter < 30) {
 		loop_start_counter++;
 		servo_reset_pid();		// lahko se poveča d / hitrost, zaradi poznega call je dt manjši
+
 		PID_Reset(&d_pid);
 		PID_Reset(&q_pid);
+
+		LPF_Reset(&iq_lpf);
+
 		return;
 	}
+	*/
 
 	int16_t tim_a = (int16_t)(da * (float)TIM1->ARR);
 	int16_t tim_b = (int16_t)(db * (float)TIM1->ARR);
@@ -410,4 +400,19 @@ void FOC_Loop()
     TIM1->CCR3 = min(max_a, tim_max);
     TIM1->CCR2 = min(max_b, tim_max);
     TIM1->CCR1 = min(max_c, tim_max);
+
+	/*
+	if(velocity_counter != 1) {
+		return;
+	}
+
+	uint8_t b[SERIAL_MAX_SIZE] = {0};
+    uint16_t len = u64ToDec((uint64_t)(1e4f + 1000.0f * ia), b);
+    b[len++] = ',';
+	len += u64ToDec((uint64_t)(1e4f + 1000.0f * ib), b + len);
+	b[len++] = ',';
+	len += u64ToDec((uint64_t)(1e4f + 1000.0f * ic), b + len);
+	b[len++] = '\n';
+    usb_serial.print(b, len);
+	*/
 }

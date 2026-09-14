@@ -65,7 +65,10 @@
 volatile bool uart_available = false;
 volatile bool usb_available = false;
 
-bool foc_ready = false;
+bool foc_enabled = false;
+bool foc_calibrated = false;
+
+uint32_t foc_calibration_counter = 0;
 
 uint32_t encoder_read_cycle = 0;
 
@@ -167,15 +170,7 @@ int main(void)
 
   CORDIC_SetRotationMode();
 
-  HAL_GPIO_WritePin(CS_GATE_PORT, CS_GATE_PIN, GPIO_PIN_SET);
-
-  //while(!HAL_GPIO_ReadPin(EN_PORT, EN_PIN)) {}
-
-  HAL_Delay(50);
-
   DRV8323_Init(&hspi1);
-
-  HAL_Delay(50);
 
   HAL_SPI_DeInit(&hspi1);
   hspi1.Instance = SPI1;
@@ -196,8 +191,6 @@ int main(void)
   {
     Error_Handler();
   }
-
-  HAL_Delay(50);
 
   #ifdef RA
   FOC_Init(&hadc1, &hadc3, &hadc2);
@@ -230,14 +223,13 @@ int main(void)
   TIM1->CCR2 = 0;
   TIM1->CCR3 = 0;
 
-  foc_ready = true;
+  foc_enabled = true;
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
-  //uint32_t millis = HAL_GetTick();
   uint32_t millis = DWT->CYCCNT >> 17;
 
   while (1) {
@@ -247,24 +239,8 @@ int main(void)
       millis = DWT->CYCCNT >> 17;
 
       fault = !((bool)HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_6));
-    
-      uint32_t cycle = (DWT->CYCCNT) >> 7;
 
-      //FOC_Loop();
-
-      //MT6835_FetchAngle();
-
-      uint32_t diff = ((DWT->CYCCNT) >> 7) - cycle;
-
-      //uint8_t b[32];
-      //memset(b, 0, 32);
-      //uint16_t len = u64ToHex(MT6835_GetRawAngle(), b);
-      //uint16_t len = u64ToDec((uint32_t)(10000.0f + 1000.0f * v_d), b);
-      //b[len] = '\n';
-      //b[len + 1] = '\0';
-      if(!fault) {
-        //usb_serial.print(b, 32);
-      }
+      foc_enabled = !fault;
 
       if(fault) {
         HAL_SPI_DeInit(&hspi1);
@@ -283,13 +259,11 @@ int main(void)
         DRV8323_ReadRegister(DRV8323_REG_GATE_LS, &fault2);
         uint32_t fault_regs = ((uint32_t)fault1 << 16) | (uint32_t)fault2;
 
-        uint8_t c[32];
-        memset(c, 0, 32);
+        uint8_t c[32] = {0};
         uint16_t lenc = u64ToHex(fault_regs, c);
-        c[lenc] = 'x';
-        c[lenc + 1] = '\n';
-        c[lenc + 2] = '\0'; 
-        usb_serial.print(c, 32);
+        c[lenc++] = 'x';
+        c[lenc++] = '\n';
+        usb_serial.print(c, lenc);
 
         HAL_SPI_DeInit(&hspi1);
         hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
@@ -302,7 +276,7 @@ int main(void)
         HAL_Delay(50);
       }
 
-      
+
 
 	    if(uart_available) {
 	    	handle_serial(&uart_serial);
@@ -369,20 +343,26 @@ void SystemClock_Config(void)
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-  if (htim->Instance != TIM1 || fault || !foc_ready) {
+  if (htim->Instance != TIM1 || fault || !foc_enabled) {
     return;
   }
 
   if(htim->Instance->CR1 & TIM_CR1_DIR) {   // štetje dol, sredina pwm-ja
-    if(foc_loop_counter == FOC_LOOP_PRESCALER - 1) {
-      encoder_read_cycle = DWT->CYCCNT;
-      MT6835_FetchAngle();
-    }
+    encoder_read_cycle = DWT->CYCCNT;
+    MT6835_FetchAngle();
   } else {
-    if(++foc_loop_counter >= FOC_LOOP_PRESCALER) {
-      foc_loop_counter = 0;
-      FOC_Loop();
+    if(!foc_calibrated) {
+      FOC_Calibrate_ADCs();
+
+      if(foc_calibration_counter++ > 1000) {
+        foc_calibrated = true;
+      }
+    
+      return;
     }
+
+    foc_loop_counter = 0;
+    FOC_Loop();
   }
 }
 

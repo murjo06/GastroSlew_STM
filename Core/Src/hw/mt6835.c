@@ -45,6 +45,32 @@ void MT6835_Init(SPI_HandleTypeDef *_hspi)
     mt_active = true;
 }
 
+static uint8_t MT6835_CRC8(const uint8_t *data, uint8_t len)
+{
+    uint8_t crc = 0;
+
+    for(uint8_t i = 0; i < len; i++) {
+        crc ^= data[i];
+
+        for(uint8_t bit = 0; bit < 8; bit++) {
+            if(crc & 0x80) {
+                crc = (uint8_t)((crc << 1) ^ 0x07);
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+
+    return crc;
+}
+
+static bool MT6835_CheckCRC(void)
+{
+    uint8_t calculated_crc = MT6835_CRC8(&rx[2], 3);
+
+    return calculated_crc == rx[5];
+}
+
 HAL_StatusTypeDef MT6835_FetchAngle(void)
 {
     if(!mt_available) {
@@ -65,7 +91,9 @@ void MT6835_Callback(void)
 
     mt_available = true;
 
-    angle_raw = ((int32_t)rx[2] << 13) | ((int32_t)rx[3] << 5) | ((int32_t)rx[4] >> 3);
+    if(MT6835_CheckCRC()) {
+        angle_raw = ((int32_t)rx[2] << 13) | ((int32_t)rx[3] << 5) | ((int32_t)rx[4] >> 3);
+    }
 
     CS_High();
 }
@@ -81,7 +109,15 @@ HAL_StatusTypeDef MT6835_FetchAngleSync(void)
 
     HAL_StatusTypeDef status = HAL_SPI_TransmitReceive(hspi, tx, rx, 6, MT6835_TIMEOUT);
 
-    angle_raw = ((int32_t)rx[2] << 13) | ((int32_t)rx[3] << 5)  | ((int32_t)rx[4] >> 3);
+    if(status != HAL_OK) {
+        return status;
+    }
+
+    if(MT6835_CheckCRC()) {
+        angle_raw = ((int32_t)rx[2] << 13) | ((int32_t)rx[3] << 5)  | ((int32_t)rx[4] >> 3);
+    } else {
+        return HAL_ERROR;
+    }
 
     CS_High();
 

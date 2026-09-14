@@ -12,7 +12,8 @@ extern "C" {
 #endif
 
 #define UART_DMA_RX_BUFFER_SIZE     256
-#define UART_FRAME_MAX_LENGTH       64
+
+#define SERIAL_MAX_SIZE       		64
 
 #define SERIAL_START_CHAR			'<'
 #define SERIAL_END_CHAR				'>'
@@ -34,7 +35,7 @@ void UART_DMA_Start();
 
 void UART_DMA_Process(uint16_t size);
 
-void handle_serial(serial_t* serial);
+void handle_serial(serial_t *serial);
 
 uint16_t u64ToHex(uint64_t value, uint8_t *buffer);
 

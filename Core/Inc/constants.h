@@ -3,11 +3,12 @@
 #include <math.h>
 
 #define ROOT_THREE_F            1.7320508f
-#define INVERSE_ROOT_THREE_F    0.57735026f
+#define ROOT_THREE_INVERSE_F    0.57735026f
 #define ONE_THIRD_F             0.33333333f
 #define TWO_THIRDS_F            0.66666667f
 #define PI_F                    3.14159265f
 #define TWO_PI_F				6.28318531f
+#define TWO_PI_INVERSE_F        0.15915494f
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #define max(a, b) ((a) > (b) ? (a) : (b))

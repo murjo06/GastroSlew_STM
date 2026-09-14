@@ -59,14 +59,13 @@ float PID_GetOutput(pid_t *p, float error)
 void PID_Reset(pid_t *p)
 {
     p->prev_cycle = DWT->CYCCNT;
-    p->prev_derivative_cycle = p->prev_cycle;
-
-    p->prev_derivative = 0.0f;
-    p->derivative_series = 0;
 
     p->dt = 0.0f;
     p->integral = 0.0f;
 
     p->prev_derivative = 0.0f;
     p->prev_derivative_error = 0.0f;
+
+    p->derivative_series = 0;
+    p->prev_derivative_cycle = p->prev_cycle;
 }

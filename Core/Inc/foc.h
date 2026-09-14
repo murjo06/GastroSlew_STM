@@ -13,13 +13,6 @@
 extern float powers[VELOCITY_LOOP_PRESCALER];
 extern float iqs[VELOCITY_LOOP_PRESCALER];
 
-
-
-extern float iq_target;
-
-
-
-
 extern float delta;
 extern bool iq_saturated;
 
@@ -44,6 +37,8 @@ extern const float micro_multiplier;
 void FOC_Init(ADC_HandleTypeDef *_hadcA, ADC_HandleTypeDef *_hadcB, ADC_HandleTypeDef *_hadcC);
 
 void FOC_ADC_Callback(ADC_HandleTypeDef *hadc);
+
+void FOC_Calibrate_ADCs(void);
 
 void FOC_Loop();
 
